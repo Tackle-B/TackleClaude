@@ -13,7 +13,7 @@ from kama_claude.core.permissions.storage import load_policy_file
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _make_manager(**policies: ToolPolicy) -> PermissionManager:
-    # policy_file=None：测试中不使用持久化，不污染 ~/.kama/policy.toml
+    # project_policy_file=None：测试中不使用持久化，不污染项目 .kama/policy.toml
     return PermissionManager(policies or None)
 
 
@@ -107,20 +107,20 @@ async def test_check_and_wait_deny_once_returns_false() -> None:
     assert decision == "deny_once"
 
 
-# ── always_allow cache ────────────────────────────────────────────────────────
+# ── allow_session cache ────────────────────────────────────────────────────
 
-# 功能：验证 respond("always_allow") 后同 session 同工具下次不再发事件
-# 设计：第二次调用 check_and_wait 命中 always 缓存，直接返回 (True, "auto_allow")，emitted 仍为 1 条
-async def test_always_allow_skips_future_ask() -> None:
+# 功能：验证 respond("allow_session") 后同 session 同工具下次不再发事件
+# 设计：第二次调用 check_and_wait 命中 session 缓存，直接返回 (True, "auto_allow")，emitted 仍为 1 条
+async def test_allow_session_skips_future_ask() -> None:
     mgr = _make_manager()
     emitted, emitter = await _collect_emitted()
 
-    # First call: user says "always allow"
-    async def _auto_always() -> None:
+    # First call: user says "allow session"
+    async def _auto_session() -> None:
         await asyncio.sleep(0)
-        mgr.respond("t4", "always_allow")
+        mgr.respond("t4", "allow_session")
 
-    task = asyncio.create_task(_auto_always())
+    task = asyncio.create_task(_auto_session())
     r1, _ = await mgr.check_and_wait(
         tool_use_id="t4", tool_name="bash",
         params={"command": "echo hi"}, session_id="s1",
@@ -129,7 +129,7 @@ async def test_always_allow_skips_future_ask() -> None:
     await task
     assert r1 is True
 
-    # Second call: should hit cache, no new event
+    # Second call: should hit session cache, no new event
     r2, d2 = await mgr.check_and_wait(
         tool_use_id="t5", tool_name="bash",
         params={"command": "ls"}, session_id="s1",
@@ -141,19 +141,19 @@ async def test_always_allow_skips_future_ask() -> None:
     assert len(emitted) == 1  # only the first call emitted an event
 
 
-# 功能：验证 always_allow 在同一 manager 实例内对所有 session 生效（persistent_always 共享）
-# 设计：s1 设置 always_allow → 写入 _persistent_always；s2 命中 persistent 缓存，直接放行；
-#       emitted 只有 1 条（s2 不需要再 ASK）。这是 persistent always 的核心跨 session 语义。
-async def test_always_allow_not_shared_across_sessions() -> None:
+# 功能：验证 allow_session 在同一 manager 实例内对不同 session 不共享
+# 设计：s1 设置 allow_session → 只写入 session 缓存；s2 不命中 session 缓存，
+#       需要重新 ASK；emitted 应有 2 条。这是 session 级隔离的核心语义。
+async def test_allow_session_not_shared_across_sessions() -> None:
     mgr = _make_manager()
     emitted, emitter = await _collect_emitted()
 
-    # session s1 sets always allow for bash
-    async def _auto_always() -> None:
+    # session s1 sets allow session for bash
+    async def _auto_session() -> None:
         await asyncio.sleep(0)
-        mgr.respond("t6", "always_allow")
+        mgr.respond("t6", "allow_session")
 
-    task = asyncio.create_task(_auto_always())
+    task = asyncio.create_task(_auto_session())
     await mgr.check_and_wait(
         tool_use_id="t6", tool_name="bash",
         params={"command": "echo"}, session_id="s1",
@@ -161,31 +161,71 @@ async def test_always_allow_not_shared_across_sessions() -> None:
     )
     await task
 
-    # session s2 — persistent_always["bash"] = "allow" → 直接放行，不再 ASK
+    # session s2 — 不命中 session 缓存，需要再次 ASK
+    async def _auto_session2() -> None:
+        await asyncio.sleep(0)
+        mgr.respond("t7", "allow_once")
+
+    task2 = asyncio.create_task(_auto_session2())
     r, d = await mgr.check_and_wait(
         tool_use_id="t7", tool_name="bash",
+        params={"command": "echo"}, session_id="s2",
+        event_emitter=emitter,
+    )
+    await task2
+
+    assert r is True
+    assert d == "allow_once"
+    assert len(emitted) == 2  # s1 和 s2 各发一次事件
+
+
+# ── allow_project cache ────────────────────────────────────────────────────
+
+# 功能：验证 allow_project 在同一 manager 实例内对所有 session 生效（project_always 共享）
+# 设计：s1 设置 allow_project → 写入 _project_always；s2 命中项目级缓存，直接放行；
+#       emitted 只有 1 条（s2 不需要再 ASK）。这是项目级跨 session 语义。
+async def test_allow_project_shared_across_sessions() -> None:
+    mgr = _make_manager()
+    emitted, emitter = await _collect_emitted()
+
+    # session s1 sets allow project for bash
+    async def _auto_project() -> None:
+        await asyncio.sleep(0)
+        mgr.respond("t6p", "allow_project")
+
+    task = asyncio.create_task(_auto_project())
+    await mgr.check_and_wait(
+        tool_use_id="t6p", tool_name="bash",
+        params={"command": "echo"}, session_id="s1",
+        event_emitter=emitter,
+    )
+    await task
+
+    # session s2 — project_always["bash"] = "allow" → 直接放行，不再 ASK
+    r, d = await mgr.check_and_wait(
+        tool_use_id="t7p", tool_name="bash",
         params={"command": "echo"}, session_id="s2",
         event_emitter=emitter,
     )
 
     assert r is True
     assert d == "auto_allow"
-    assert len(emitted) == 1  # s2 命中 persistent 缓存，不再发出事件
+    assert len(emitted) == 1  # s2 命中项目级缓存，不再发出事件
 
 
-# ── always_deny cache ─────────────────────────────────────────────────────────
+# ── deny_session cache ────────────────────────────────────────────────────
 
-# 功能：验证 respond("always_deny") 后同 session 同工具下次直接返回 (False, "auto_deny")
-# 设计：用户选择 always deny 后不应继续骚扰，下次调用静默拒绝
-async def test_always_deny_skips_future_ask() -> None:
+# 功能：验证 respond("deny_session") 后同 session 同工具下次直接返回 (False, "auto_deny")
+# 设计：用户选择 deny session 后该 session 内不再骚扰，下次调用静默拒绝
+async def test_deny_session_skips_future_ask() -> None:
     mgr = _make_manager()
     emitted, emitter = await _collect_emitted()
 
-    async def _auto_always_deny() -> None:
+    async def _auto_deny_session() -> None:
         await asyncio.sleep(0)
-        mgr.respond("t8", "always_deny")
+        mgr.respond("t8", "deny_session")
 
-    task = asyncio.create_task(_auto_always_deny())
+    task = asyncio.create_task(_auto_deny_session())
     r1, _ = await mgr.check_and_wait(
         tool_use_id="t8", tool_name="bash",
         params={"command": "echo"}, session_id="s1",
@@ -202,6 +242,39 @@ async def test_always_deny_skips_future_ask() -> None:
     )
     assert r2 is False
     assert d2 == "auto_deny"
+    assert len(emitted) == 1
+
+
+# ── deny_project cache ────────────────────────────────────────────────────
+
+# 功能：验证 deny_project 在同一 manager 实例内对所有 session 生效
+# 设计：s1 设置 deny_project → 写入 _project_always；s2 命中项目级缓存，直接拒绝；
+#       emitted 只有 1 条。这是项目级跨 session deny 语义。
+async def test_deny_project_shared_across_sessions() -> None:
+    mgr = _make_manager()
+    emitted, emitter = await _collect_emitted()
+
+    async def _auto_deny_project() -> None:
+        await asyncio.sleep(0)
+        mgr.respond("tdp1", "deny_project")
+
+    task = asyncio.create_task(_auto_deny_project())
+    await mgr.check_and_wait(
+        tool_use_id="tdp1", tool_name="bash",
+        params={"command": "echo"}, session_id="s1",
+        event_emitter=emitter,
+    )
+    await task
+
+    # session s2 — project_always["bash"] = "deny" → 直接拒绝
+    r, d = await mgr.check_and_wait(
+        tool_use_id="tdp2", tool_name="bash",
+        params={"command": "ls"}, session_id="s2",
+        event_emitter=emitter,
+    )
+
+    assert r is False
+    assert d == "auto_deny"
     assert len(emitted) == 1
 
 
@@ -288,21 +361,21 @@ def test_respond_unknown_tool_use_id_is_noop() -> None:
     mgr.respond("nonexistent", "allow_once")  # should not raise
 
 
-# ── OUTSIDE_CWD 不被 always 缓存绕过 ─────────────────────────────────────────
+# ── OUTSIDE_CWD 不被 session 缓存绕过 ─────────────────────────────────────────
 
-# 功能：验证 always_allow bash 之后，含绝对路径的命令仍触发 ASK，不被缓存绕过
-# 设计：先让 session s1 对 bash 设置 always_allow，再请求含绝对路径命令；
-#       OUTSIDE_CWD 检查在 always 缓存之前，应发出 permission.requested 事件
-async def test_always_allow_does_not_bypass_outside_cwd() -> None:
+# 功能：验证 allow_session bash 之后，含绝对路径的命令仍触发 ASK，不被缓存绕过
+# 设计：先让 session s1 对 bash 设置 allow_session，再请求含绝对路径命令；
+#       OUTSIDE_CWD 检查在 session 缓存之前，应发出 permission.requested 事件
+async def test_allow_session_does_not_bypass_outside_cwd() -> None:
     mgr = _make_manager()
     emitted, emitter = await _collect_emitted()
 
-    # 首次 allow → 写入 session always 缓存
-    async def _auto_always() -> None:
+    # 首次 allow → 写入 session 缓存
+    async def _auto_session() -> None:
         await asyncio.sleep(0)
-        mgr.respond("t_always", "always_allow")
+        mgr.respond("t_always", "allow_session")
 
-    t = asyncio.create_task(_auto_always())
+    t = asyncio.create_task(_auto_session())
     await mgr.check_and_wait(
         tool_use_id="t_always", tool_name="bash",
         params={"command": "echo ok"}, session_id="s1",
@@ -311,7 +384,7 @@ async def test_always_allow_does_not_bypass_outside_cwd() -> None:
     await t
     assert len(emitted) == 1  # 首次 ASK 触发事件
 
-    # 第二次：bash + 绝对路径 → OUTSIDE_CWD 强制 ASK，不命中 session always 缓存
+    # 第二次：bash + 绝对路径 → OUTSIDE_CWD 强制 ASK，不命中 session 缓存
     async def _auto_respond_abs() -> None:
         await asyncio.sleep(0)
         mgr.respond("t_abs", "allow_once")
@@ -328,21 +401,23 @@ async def test_always_allow_does_not_bypass_outside_cwd() -> None:
     assert len(emitted) == 2  # 绝对路径命令再次触发 ASK，共 2 个事件
 
 
-# ── 持久化 always 写文件 ──────────────────────────────────────────────────────
+# ── 项目级持久化写入 ──────────────────────────────────────────────────────
 
-# 功能：验证 always_allow 决策写入 policy_file，新 PermissionManager 加载后自动放行
-# 设计：用 tmp_path 作为 policy_file，断言文件存在且内容正确；
-#       再新建 manager 加载文件，同工具无需 ASK 直接返回 auto_allow
-async def test_persistent_always_written_and_reloaded(tmp_path: pytest.TempPathFixture) -> None:
-    policy_file = tmp_path / "policy.toml"
-    mgr = PermissionManager(policy_file=policy_file)
+# 功能：验证 allow_project 决策写入 project_policy_file，新 PermissionManager 加载后自动放行
+# 设计：用 tmp_path 作为项目根目录，断言 .kama/policy.toml 文件存在且内容正确；
+#       再新建 manager 加载同一文件，同工具无需 ASK 直接返回 auto_allow
+async def test_project_policy_written_and_reloaded(tmp_path: pytest.TempPathFixture) -> None:
+    project_root = tmp_path / "my_project"
+    project_root.mkdir()
+    policy_file = project_root / ".kama" / "policy.toml"
+    mgr = PermissionManager(project_root=project_root, project_policy_file=policy_file)
     emitted, emitter = await _collect_emitted()
 
-    async def _auto_always() -> None:
+    async def _auto_project() -> None:
         await asyncio.sleep(0)
-        mgr.respond("tp1", "always_allow")
+        mgr.respond("tp1", "allow_project")
 
-    t = asyncio.create_task(_auto_always())
+    t = asyncio.create_task(_auto_project())
     allowed, _ = await mgr.check_and_wait(
         tool_use_id="tp1", tool_name="bash",
         params={"command": "echo"}, session_id="s1",
@@ -356,7 +431,7 @@ async def test_persistent_always_written_and_reloaded(tmp_path: pytest.TempPathF
     assert loaded.get("bash") == "allow"
 
     # 新 manager 加载同一文件，bash 应直接 auto_allow（无 OUTSIDE_CWD）
-    mgr2 = PermissionManager(policy_file=policy_file)
+    mgr2 = PermissionManager(project_root=project_root, project_policy_file=policy_file)
     emitted2, emitter2 = await _collect_emitted()
     allowed2, decision2 = await mgr2.check_and_wait(
         tool_use_id="tp2", tool_name="bash",

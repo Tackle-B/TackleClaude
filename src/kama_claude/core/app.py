@@ -217,15 +217,18 @@ class CoreApp:
             await self._trace.start()
             self._bus.subscribe(self._trace_event_handler) # 埋点3
 
-        policy_file = Path("~/.kama/policy.toml").expanduser()
+        project_root = Path.cwd()
+        project_policy_file = project_root / ".kama" / "policy.toml"
         self._permission_manager = PermissionManager(
-            policy_file=policy_file,
+            project_root=project_root,
+            project_policy_file=project_policy_file,
             timeout_s=self._config.permission.timeout_s,
         )
         logger.info(
-            "permission manager: timeout_s=%.1f  persistent=%d entries",
+            "permission manager: timeout_s=%.1f  project_root=%s  project_policy=%d entries",
             self._config.permission.timeout_s,
-            len(load_policy_file(policy_file)),
+            project_root,
+            len(load_policy_file(project_policy_file)),
         )
 
         self._broadcaster = IpcEventBroadcaster(trace=self._trace)

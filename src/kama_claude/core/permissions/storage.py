@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_DEFAULT_POLICY_PATH = Path("~/.kama/policy.toml")
-
 
 # 加载 policy.toml 中 [always] 节，返回 {tool_name: "allow"/"deny"}；文件不存在时返回空字典
-def load_policy_file(path: Path | None = None) -> dict[str, str]:
-    p = (path or _DEFAULT_POLICY_PATH).expanduser()
+def load_policy_file(path: Path) -> dict[str, str]:
+    p = path.expanduser()
     if not p.exists():
         return {}
     result: dict[str, str] = {}
@@ -30,11 +28,11 @@ def load_policy_file(path: Path | None = None) -> dict[str, str]:
 
 
 # 将 {tool_name: "allow"/"deny"} 写入 policy.toml，覆盖 [always] 节
-def save_policy_file(always: dict[str, str], path: Path | None = None) -> None:
-    p = (path or _DEFAULT_POLICY_PATH).expanduser()
+def save_policy_file(always: dict[str, str], path: Path) -> None:
+    p = path.expanduser()
     p.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# ~/.kama/policy.toml",
+        f"# {p}",
         "# 由 kama-core 自动管理，手动编辑生效但格式须正确",
         "",
         "[always]",

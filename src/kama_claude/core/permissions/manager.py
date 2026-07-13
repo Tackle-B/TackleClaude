@@ -33,13 +33,14 @@ class _PendingRequest:
     tool_name: str
 
 
-# 管理工具调用权限：策略评估、用户审批挂起、session 级和持久化 always 缓存、超时
+# 管理工具调用权限：策略评估、用户审批挂起、session 级和项目级缓存、超时
 class PermissionManager:
     def __init__(
         self,
         policies: dict[str, ToolPolicy] | None = None,
         *,
-        policy_file: Path | None = None,
+        project_root: Path | None = None,
+        project_policy_file: Path | None = None,
         timeout_s: float = 60.0,
     ) -> None:
         self._policies: dict[str, ToolPolicy] = policies or dict(DEFAULT_POLICIES)
@@ -47,10 +48,11 @@ class PermissionManager:
         self._pending: dict[str, _PendingRequest] = {}
         # (session_id, tool_name) → "allow" | "deny"（session 内存，重启丢失）
         self._session_always: dict[tuple[str, str], str] = {}
-        # tool_name → "allow" | "deny"（持久化，从 policy_file 加载）
-        self._policy_file = policy_file
-        self._persistent_always: dict[str, str] = (
-            load_policy_file(policy_file) if policy_file is not None else {}
+        # tool_name → "allow" | "deny"（项目级持久化，从 project_policy_file 加载）
+        self._project_root = project_root
+        self._project_policy_file = project_policy_file
+        self._project_always: dict[str, str] = (
+            load_policy_file(project_policy_file) if project_policy_file is not None else {}
         )
         # 0 表示不超时
         self._timeout_s = timeout_s
@@ -91,10 +93,10 @@ class PermissionManager:
                 logger.debug("permission: session cache hit tool=%s decision=%s", tool_name, cached)
                 return cached == "allow", f"auto_{cached}"
 
-            # Tier 4: persistent always（跨 session）
-            if tool_name in self._persistent_always:
-                cached = self._persistent_always[tool_name]
-                logger.debug("permission: persistent cache hit tool=%s decision=%s", tool_name, cached)
+            # Tier 4: project always（跨 session，项目级持久化）
+            if tool_name in self._project_always:
+                cached = self._project_always[tool_name]
+                logger.debug("permission: project cache hit tool=%s decision=%s", tool_name, cached)
                 return cached == "allow", f"auto_{cached}"
 
             # Tier 5: allow_patterns（bash only）
@@ -134,10 +136,10 @@ class PermissionManager:
 
         try:
             if self._timeout_s > 0:
-                raw = await asyncio.wait_for(future, timeout=self._timeout_s) # 这里等待用户输入allow once或者其他命令
+                raw = await asyncio.wait_for(future, timeout=self._timeout_s)
             else:
                 raw = await future
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._pending.pop(tool_use_id, None)
             logger.info("permission: timeout tool_use_id=%s tool=%s", tool_use_id, tool_name)
             return False, "timeout"
@@ -154,40 +156,46 @@ class PermissionManager:
         if not req.future.done():
             req.future.set_result(decision)
 
-    # 应用审批决策，更新 session + persistent 缓存，返回是否放行
+    # 应用审批决策，更新 session + project 缓存，返回是否放行
     def _apply_response(self, decision: str, session_id: str, tool_name: str) -> bool:
-        allow = decision in ("allow_once", "always_allow")
-        if decision == "always_allow":
+        allow_set = {"allow_once", "allow_session", "allow_project"}
+        allow = decision in allow_set
+
+        if decision == "allow_session":
             self._session_always[(session_id, tool_name)] = "allow"
-            self._persistent_always[tool_name] = "allow"
+        elif decision == "allow_project":
+            self._session_always[(session_id, tool_name)] = "allow"
+            self._project_always[tool_name] = "allow"
             logger.info(
-                "permission: always allow tool=%s policy_file=%s persistent=%s",
-                tool_name, self._policy_file, self._persistent_always,
+                "permission: allow project tool=%s policy_file=%s project=%s",
+                tool_name, self._project_policy_file, self._project_always,
             )
-            if self._policy_file is not None:
-                try:
-                    save_policy_file(self._persistent_always, self._policy_file)
-                    logger.info("permission: policy.toml written path=%s", self._policy_file)
-                except Exception:
-                    logger.exception("permission: failed to write policy.toml path=%s", self._policy_file)
-            else:
-                logger.warning("permission: policy_file is None, skipping persistence")
-        elif decision == "always_deny":
+            self._save_project_policy()
+        elif decision == "deny_session":
             self._session_always[(session_id, tool_name)] = "deny"
-            self._persistent_always[tool_name] = "deny"
+        elif decision == "deny_project":
+            self._session_always[(session_id, tool_name)] = "deny"
+            self._project_always[tool_name] = "deny"
             logger.info(
-                "permission: always deny tool=%s policy_file=%s persistent=%s",
-                tool_name, self._policy_file, self._persistent_always,
+                "permission: deny project tool=%s policy_file=%s project=%s",
+                tool_name, self._project_policy_file, self._project_always,
             )
-            if self._policy_file is not None:
-                try:
-                    save_policy_file(self._persistent_always, self._policy_file)
-                    logger.info("permission: policy.toml written path=%s", self._policy_file)
-                except Exception:
-                    logger.exception("permission: failed to write policy.toml path=%s", self._policy_file)
-            else:
-                logger.warning("permission: policy_file is None, skipping persistence")
+            self._save_project_policy()
+
         return allow
+
+    # 将项目级策略写入磁盘
+    def _save_project_policy(self) -> None:
+        if self._project_policy_file is None:
+            logger.warning("permission: project_policy_file is None, skipping persistence")
+            return
+        try:
+            save_policy_file(self._project_always, self._project_policy_file)
+            logger.info("permission: project policy.toml written path=%s",
+                        self._project_policy_file)
+        except Exception:
+            logger.exception("permission: failed to write project policy.toml path=%s",
+                             self._project_policy_file)
 
     # 客户端断连时拒绝该 session 所有待审批请求，防止 Future 永久挂起
     def cancel_session(self, session_id: str, reason: str = "client_disconnected") -> None:

@@ -145,10 +145,10 @@ async def test_permission_deny_once_tool_not_executed(tmp_path: Path) -> None:
     assert getattr(failed_events[0], "error_class", None) == "permission_denied"
 
 
-# 功能：验证 always_allow 决策在 session 内缓存，第二次同名工具不再触发 permission.requested
-# 设计：两步 bash 调用；第一次 respond("always_allow")，断言 permission.requested 只出现一次；
+# 功能：验证 allow_session 决策在 session 内缓存，第二次同名工具不再触发 permission.requested
+# 设计：两步 bash 调用；第一次 respond("allow_session")，断言 permission.requested 只出现一次；
 #       第二次工具调用命中缓存并直接执行，不挂起 Future
-async def test_always_allow_cached_within_session(tmp_path: Path) -> None:
+async def test_allow_session_cached_within_session(tmp_path: Path) -> None:
     manager = PermissionManager()
     bus = EventBus()
     perm_requested_count = 0
@@ -157,7 +157,7 @@ async def test_always_allow_cached_within_session(tmp_path: Path) -> None:
         nonlocal perm_requested_count
         if getattr(e, "type", "") == "permission.requested":
             perm_requested_count += 1
-            manager.respond(getattr(e, "tool_use_id", ""), "always_allow")
+            manager.respond(getattr(e, "tool_use_id", ""), "allow_session")
 
     bus.subscribe(collect)
     outcome = await _runner(_TwoBashProvider(), bus, manager, tmp_path).run_and_capture(

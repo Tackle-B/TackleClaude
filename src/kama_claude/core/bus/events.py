@@ -165,7 +165,7 @@ class PermissionGrantedEvent(BaseModel):
     type: Literal["permission.granted"] = "permission.granted"
     run_id: str
     tool_use_id: str
-    # "allow_once" | "always_allow" | "auto_allow"
+    # "allow_once" | "allow_session" | "allow_project" | "auto_allow"
     decision: str
     ts: str
 
@@ -174,7 +174,7 @@ class PermissionDeniedEvent(BaseModel):
     type: Literal["permission.denied"] = "permission.denied"
     run_id: str
     tool_use_id: str
-    # "deny_once" | "always_deny" | "auto_deny"
+    # "deny_once" | "deny_session" | "deny_project" | "auto_deny"
     decision: str
     ts: str
 

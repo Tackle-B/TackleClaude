@@ -156,16 +156,20 @@ class PermissionSelect(Static):
     """
 
     _CHOICES: tuple[tuple[str, str, str], ...] = (
-        ("allow_once",   "Allow once",   "y / 1"),
-        ("always_allow", "Always allow", "a / 2"),
-        ("deny_once",    "Deny",         "n / 3"),
-        ("always_deny",  "Always deny",  "d / 4"),
+        ("allow_once",    "Allow once",            "y / 1"),
+        ("allow_session", "Allow for this session", "s / 2"),
+        ("allow_project", "Allow for this project", "a / 3"),
+        ("deny_once",     "Deny",                  "n / 4"),
+        ("deny_session",  "Deny for this session",  "f / 5"),
+        ("deny_project",  "Deny for this project",  "d / 6"),
     )
     _KEY_MAP: dict[str, str] = {
-        "y": "allow_once",  "1": "allow_once",
-        "a": "always_allow","2": "always_allow",
-        "n": "deny_once",   "3": "deny_once",
-        "d": "always_deny", "4": "always_deny",
+        "y": "allow_once",    "1": "allow_once",
+        "s": "allow_session", "2": "allow_session",
+        "a": "allow_project", "3": "allow_project",
+        "n": "deny_once",     "4": "deny_once",
+        "f": "deny_session",  "5": "deny_session",
+        "d": "deny_project",  "6": "deny_project",
     }
 
     # 用户作出权限决策时发布，携带工具 ID 和决策字符串
@@ -252,11 +256,13 @@ class PermissionBlock(Static):
     """日志里的权限审批摘要"""
 
     _LABEL_MAP: dict[str, str] = {
-        "allow_once":   "allowed (once)",
-        "always_allow": "always allowed",
-        "deny_once":    "denied",
-        "always_deny":  "always denied",
-        "timeout":      "⏱ timed out",
+        "allow_once":    "allowed (once)",
+        "allow_session": "allowed (session)",
+        "allow_project": "allowed (project)",
+        "deny_once":     "denied",
+        "deny_session":  "denied (session)",
+        "deny_project":  "denied (project)",
+        "timeout":       "⏱ timed out",
     }
     LABEL_MAP = _LABEL_MAP
 
@@ -284,7 +290,7 @@ class PermissionBlock(Static):
         if self._resolved:
             return
         self._resolved = True
-        allowed = decision in ("allow_once", "always_allow")
+        allowed = decision in ("allow_once", "allow_session", "allow_project")
         icon = "[bold green]✓[/bold green]" if allowed else "[bold red]✗[/bold red]"
         label = self._LABEL_MAP.get(decision, decision)
         preview = f"  [dim]{self._param_preview}[/dim]" if self._param_preview else ""

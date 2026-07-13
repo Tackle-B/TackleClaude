@@ -9,9 +9,11 @@ from kama_claude.core.transport.socket_client import IpcError, SocketClient
 
 _DECISION_MAP: dict[str, str] = {
     "y": "allow_once",
-    "a": "always_allow",
+    "s": "allow_session",
+    "a": "allow_project",
     "n": "deny_once",
-    "d": "always_deny",
+    "f": "deny_session",
+    "d": "deny_project",
 }
 
 
@@ -42,7 +44,8 @@ class ChatPrinter:
             param_preview = str(event.get("param_preview", ""))
             tool_use_id = str(event.get("tool_use_id", ""))
             print(f"[permission] {tool_name}  {param_preview}")
-            print("  y=allow once  a=always allow  n=deny once  d=always deny")
+            print("  y=allow once  s=allow session  a=allow project")
+            print("  n=deny  f=deny session  d=deny project")
             self.pending_permission_id = tool_use_id
         elif t == "session.waiting_for_input":
             self._ensure_newline()
@@ -97,8 +100,8 @@ async def _chat_async(config: KamaConfig) -> int:
             if printer.pending_permission_id:
                 decision = _DECISION_MAP.get(content.lower())
                 if decision is None:
-                    print("  enter y (allow once), a (always allow), "
-                          "n (deny once), d (always deny)")
+                    print("  enter y (allow once), s (allow session), a (allow project), "
+                          "n (deny), f (deny session), d (deny project)")
                     continue
                 tool_use_id = printer.pending_permission_id
                 printer.pending_permission_id = None
