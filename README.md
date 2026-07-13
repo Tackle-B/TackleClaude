@@ -19,6 +19,8 @@ TackleClaude 是一个本地运行的 AI Agent 系统（mini 版），参考了 
 规划与执行过程：
 
 ![](docs/images/4.png)
+![](docs/images/5.png)
+![](docs/images/6.png)
 
 ## 核心机制
 
