@@ -6,19 +6,19 @@ TackleClaude 是一个本地运行的 AI Agent 系统（mini 版），参考了 
 
 （接入 deepseek-v4-flash 模型，可切换其他模型）
 
-![](docs/images/2026-06-09_19-36-12.jpg)
+![](docs/images/1.png)
 
 支持命令执行、skill 使用、上下文控制与压缩：
 
-![](docs/images/2026-06-10_09-38-25.jpg)
+![](docs/images/2.png)
 
 复杂任务自动规划与执行（执行前申请本地编辑权限）：
 
-![](docs/images/2026-06-10_09-41-25.jpg)
+![](docs/images/3.png)
 
 规划与执行过程：
 
-![](docs/images/2026-06-10_09-42-43.jpg)
+![](docs/images/4.png)
 
 ## 核心机制
 
